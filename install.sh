@@ -1,57 +1,104 @@
 #!/usr/bin/env bash
-# SkilloraClouds Installer
-# Author: You
-# Description: Installs SkilloraClouds Panel (based on Pterodactyl)
+# SkilloraClouds Full Pterodactyl Setup Installer
+# Author: SkilloraClouds
+# Description: Installs or uninstalls SkilloraClouds Panel + Wings
 
 set -euo pipefail
 LOG=/var/log/skillora-install.log
 exec > >(tee -a "$LOG") 2>&1
 
-echo "=========================================="
-echo "      SkilloraClouds - Game Panel Setup"
-echo "=========================================="
+# -----------------------------
+# Default flags (can override with env variables)
+# -----------------------------
+INSTALL_PANEL=${INSTALL_PANEL:-true}
+INSTALL_WINGS=${INSTALL_WINGS:-true}
+UNINSTALL_PANEL=${UNINSTALL_PANEL:-false}
+UNINSTALL_WINGS=${UNINSTALL_WINGS:-false}
+DOMAIN=${DOMAIN:-""}
+EMAIL=${EMAIL:-""}
+
+# -----------------------------
+# SkilloraClouds Banner
+# -----------------------------
+echo -e "\e[95m"
+echo "╔══════════════════════════════════════════════════════════════╗"
+echo "║                 🚀 SkilloraClouds Installer 🚀               ║"
+echo "║           Full Pterodactyl Panel + Wings Setup              ║"
+echo "╚══════════════════════════════════════════════════════════════╝"
+echo -e "\e[0m"
 sleep 1
 
-# --- Ask for basic info ---
-read -p "Enter your domain (e.g. panel.skillora.cloud): " DOMAIN
-read -p "Enter your email for SSL certs: " EMAIL
+# -----------------------------
+# Interactive menu (if flags not set)
+# -----------------------------
+if [ -z "$DOMAIN" ] || [ -z "$EMAIL" ]; then
+    echo
+    read -p "Enter your domain (e.g. panel.skillora.cloud): " DOMAIN
+    read -p "Enter your email for SSL certs: " EMAIL
+fi
 
-echo
-echo "[+] Updating system..."
-apt update && apt upgrade -y
-apt install -y curl git zip unzip tar nginx mariadb-server redis-server php8.1 php8.1-{cli,gd,curl,mbstring,xml,mysql,bcmath,zip,intl} composer
+if [ "$INSTALL_PANEL" = true ] || [ "$INSTALL_WINGS" = true ]; then
+    echo
+    echo "Select what to install:"
+    echo "1) Panel only"
+    echo "2) Wings only"
+    echo "3) Both Panel + Wings"
+    echo "4) Uninstall Panel only"
+    echo "5) Uninstall Wings only"
+    echo "6) Uninstall Both Panel + Wings"
+    read -p "Enter your choice [1-6]: " choice
 
-echo
-echo "[+] Creating directory..."
-mkdir -p /var/www/skilloraclouds
-cd /var/www/skilloraclouds
+    case $choice in
+        1) INSTALL_PANEL=true; INSTALL_WINGS=false ;;
+        2) INSTALL_PANEL=false; INSTALL_WINGS=true ;;
+        3) INSTALL_PANEL=true; INSTALL_WINGS=true ;;
+        4) UNINSTALL_PANEL=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
+        5) UNINSTALL_WINGS=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
+        6) UNINSTALL_PANEL=true; UNINSTALL_WINGS=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
+        *) echo "Invalid choice. Exiting."; exit 1 ;;
+    esac
+fi
 
-echo
-echo "[+] Downloading SkilloraClouds panel files..."
-curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-tar -xzvf panel.tar.gz --strip-components=1
-rm panel.tar.gz
+# -----------------------------
+# System update & dependencies
+# -----------------------------
+if [ "$INSTALL_PANEL" = true ] || [ "$INSTALL_WINGS" = true ]; then
+    echo
+    echo "[+] Updating system..."
+    apt update && apt upgrade -y
+    apt install -y curl git zip unzip tar nginx mariadb-server redis-server php8.1 php8.1-{cli,gd,curl,mbstring,xml,mysql,bcmath,zip,intl} composer certbot python3-certbot-nginx
+fi
 
-echo
-echo "[+] Setting up environment..."
-cp .env.example .env
-sed -i "s|APP_URL=http://localhost|APP_URL=https://$DOMAIN|g" .env
+# -----------------------------
+# Panel Installation
+# -----------------------------
+if [ "$INSTALL_PANEL" = true ]; then
+    echo
+    echo "[+] Installing Panel..."
+    mkdir -p /var/www/skilloraclouds
+    cd /var/www/skilloraclouds
 
-echo
-echo "[+] Installing dependencies..."
-composer install --no-dev --optimize-autoloader
+    # Download and extract panel
+    curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+    tar -xzvf panel.tar.gz --strip-components=1
+    rm panel.tar.gz
 
-echo
-echo "[+] Generating app key..."
-php artisan key:generate --force
+    # Environment setup
+    cp .env.example .env
+    sed -i "s|APP_URL=http://localhost|APP_URL=https://$DOMAIN|g" .env
 
-echo
-echo "[+] Running migrations..."
-php artisan migrate --seed --force
+    echo "[+] Installing PHP dependencies..."
+    composer install --no-dev --optimize-autoloader
 
-echo
-echo "[+] Configuring Nginx..."
-cat >/etc/nginx/sites-available/skilloraclouds.conf <<EOF
+    echo "[+] Generating app key..."
+    php artisan key:generate --force
+
+    echo "[+] Running migrations..."
+    php artisan migrate --seed --force
+
+    # Nginx setup
+    echo "[+] Configuring Nginx..."
+    cat >/etc/nginx/sites-available/skilloraclouds.conf <<EOF
 server {
     listen 80;
     server_name $DOMAIN;
@@ -66,20 +113,24 @@ server {
     }
 }
 EOF
-ln -sf /etc/nginx/sites-available/skilloraclouds.conf /etc/nginx/sites-enabled/
-nginx -t && systemctl reload nginx
+    ln -sf /etc/nginx/sites-available/skilloraclouds.conf /etc/nginx/sites-enabled/
+    nginx -t && systemctl reload nginx
 
-echo
-echo "[+] Installing SSL certificate..."
-apt install -y certbot python3-certbot-nginx
-certbot --nginx -d $DOMAIN -m $EMAIL --agree-tos --redirect -n || true
+    echo "[+] Installing SSL certificate..."
+    certbot --nginx -d $DOMAIN -m $EMAIL --agree-tos --redirect -n || true
+fi
 
-echo
-echo "[+] Installing Wings..."
-curl -L -o /usr/local/bin/wings https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64
-chmod +x /usr/local/bin/wings
-mkdir -p /etc/skilloraclouds
-cat >/etc/systemd/system/wings.service <<EOF
+# -----------------------------
+# Wings Installation
+# -----------------------------
+if [ "$INSTALL_WINGS" = true ]; then
+    echo
+    echo "[+] Installing Wings..."
+    curl -L -o /usr/local/bin/wings https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64
+    chmod +x /usr/local/bin/wings
+    mkdir -p /etc/skilloraclouds
+
+    cat >/etc/systemd/system/wings.service <<EOF
 [Unit]
 Description=SkilloraClouds Wings
 After=docker.service network.target
@@ -94,12 +145,41 @@ LimitNOFILE=65536
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload
-systemctl enable --now wings.service
 
+    systemctl daemon-reload
+    systemctl enable --now wings.service
+fi
+
+# -----------------------------
+# Uninstallation
+# -----------------------------
+if [ "$UNINSTALL_PANEL" = true ]; then
+    echo
+    echo "[+] Uninstalling Panel..."
+    systemctl stop nginx || true
+    rm -rf /var/www/skilloraclouds
+    rm -f /etc/nginx/sites-available/skilloraclouds.conf
+    rm -f /etc/nginx/sites-enabled/skilloraclouds.conf
+    nginx -t && systemctl reload nginx || true
+fi
+
+if [ "$UNINSTALL_WINGS" = true ]; then
+    echo
+    echo "[+] Uninstalling Wings..."
+    systemctl stop wings.service || true
+    systemctl disable wings.service || true
+    rm -f /usr/local/bin/wings
+    rm -rf /etc/skilloraclouds
+    rm -f /etc/systemd/system/wings.service
+    systemctl daemon-reload
+fi
+
+# -----------------------------
+# Completion Banner
+# -----------------------------
 echo
-echo "=========================================="
-echo "✅ SkilloraClouds installation completed!"
-echo "Visit https://$DOMAIN to finish setup."
+echo "╔═══════════════════════════════════════════════════════╗"
+echo "✅ SkilloraClouds operation completed!"
 echo "Log file: $LOG"
-echo "=========================================="
+echo "Visit: https://$DOMAIN (if installed)"
+echo "╚═══════════════════════════════════════════════════════╝"
