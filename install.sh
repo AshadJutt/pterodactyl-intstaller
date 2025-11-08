@@ -8,12 +8,12 @@ LOG=/var/log/skillora-install.log
 exec > >(tee -a "$LOG") 2>&1
 
 echo "=========================================="
-echo "      SkilloraClouds - Pterodactyl Installation Full Setup"
+echo "      SkilloraClouds - Game Panel Setup"
 echo "=========================================="
 sleep 1
 
 # --- Ask for basic info ---
-read -p "Enter your domain (e.g. panel.example.com): " DOMAIN
+read -p "Enter your domain (e.g. panel.skillora.cloud): " DOMAIN
 read -p "Enter your email for SSL certs: " EMAIL
 
 echo
