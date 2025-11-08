@@ -1,14 +1,31 @@
 #!/usr/bin/env bash
 # SkilloraClouds Full Pterodactyl Setup Installer
-# Author: SkilloraClouds
-# Description: Installs or uninstalls SkilloraClouds Panel + Wings
-
+# Supports Ubuntu 22.04 / 24.04 only
 set -euo pipefail
 LOG=/var/log/skillora-install.log
 exec > >(tee -a "$LOG") 2>&1
 
 # -----------------------------
-# Default flags (can override with env variables)
+# Check OS version
+# -----------------------------
+OS_NAME=$(lsb_release -si)
+OS_VER=$(lsb_release -sr)
+
+if [[ "$OS_NAME" != "Ubuntu" ]]; then
+    echo "❌ This installer only supports Ubuntu 22.04 and 24.04"
+    exit 1
+fi
+
+if [[ "$OS_VER" != "22.04" && "$OS_VER" != "24.04" ]]; then
+    echo "❌ Unsupported Ubuntu version: $OS_VER"
+    echo "Please use Ubuntu 22.04 or 24.04"
+    exit 1
+fi
+
+echo "✅ Detected supported OS: $OS_NAME $OS_VER"
+
+# -----------------------------
+# Default flags
 # -----------------------------
 INSTALL_PANEL=${INSTALL_PANEL:-true}
 INSTALL_WINGS=${INSTALL_WINGS:-true}
@@ -29,44 +46,56 @@ echo -e "\e[0m"
 sleep 1
 
 # -----------------------------
-# Interactive menu (if flags not set)
+# Interactive domain/email
 # -----------------------------
-if [ -z "$DOMAIN" ] || [ -z "$EMAIL" ]; then
-    echo
+if [ -z "$DOMAIN" ]; then
     read -p "Enter your domain (e.g. panel.skillora.cloud): " DOMAIN
+fi
+
+if [ -z "$EMAIL" ]; then
     read -p "Enter your email for SSL certs: " EMAIL
 fi
 
-if [ "$INSTALL_PANEL" = true ] || [ "$INSTALL_WINGS" = true ]; then
-    echo
-    echo "Select what to install:"
-    echo "1) Panel only"
-    echo "2) Wings only"
-    echo "3) Both Panel + Wings"
-    echo "4) Uninstall Panel only"
-    echo "5) Uninstall Wings only"
-    echo "6) Uninstall Both Panel + Wings"
-    read -p "Enter your choice [1-6]: " choice
+# -----------------------------
+# Interactive menu
+# -----------------------------
+echo
+echo "Select an option:"
+echo "1) Install Panel only"
+echo "2) Install Wings only"
+echo "3) Install Both Panel + Wings"
+echo "4) Uninstall Panel only"
+echo "5) Uninstall Wings only"
+echo "6) Uninstall Both Panel + Wings"
+read -p "Enter your choice [1-6]: " choice
 
-    case $choice in
-        1) INSTALL_PANEL=true; INSTALL_WINGS=false ;;
-        2) INSTALL_PANEL=false; INSTALL_WINGS=true ;;
-        3) INSTALL_PANEL=true; INSTALL_WINGS=true ;;
-        4) UNINSTALL_PANEL=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
-        5) UNINSTALL_WINGS=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
-        6) UNINSTALL_PANEL=true; UNINSTALL_WINGS=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
-        *) echo "Invalid choice. Exiting."; exit 1 ;;
-    esac
-fi
+case $choice in
+  1) INSTALL_PANEL=true; INSTALL_WINGS=false ;;
+  2) INSTALL_PANEL=false; INSTALL_WINGS=true ;;
+  3) INSTALL_PANEL=true; INSTALL_WINGS=true ;;
+  4) UNINSTALL_PANEL=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
+  5) UNINSTALL_WINGS=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
+  6) UNINSTALL_PANEL=true; UNINSTALL_WINGS=true; INSTALL_PANEL=false; INSTALL_WINGS=false ;;
+  *) echo "Invalid choice. Exiting."; exit 1 ;;
+esac
 
 # -----------------------------
-# System update & dependencies
+# Add PHP PPA and install dependencies
 # -----------------------------
 if [ "$INSTALL_PANEL" = true ] || [ "$INSTALL_WINGS" = true ]; then
-    echo
-    echo "[+] Updating system..."
-    apt update && apt upgrade -y
-    apt install -y curl git zip unzip tar nginx mariadb-server redis-server php8.1 php8.1-{cli,gd,curl,mbstring,xml,mysql,bcmath,zip,intl} composer certbot python3-certbot-nginx
+    echo "[+] Adding PHP repository and installing dependencies..."
+    apt update && apt install -y software-properties-common curl
+    add-apt-repository -y ppa:ondrej/php
+    apt update
+
+    # PHP 8.1 + extensions required for Pterodactyl
+    apt install -y php8.1 php8.1-cli php8.1-gd php8.1-curl php8.1-mbstring \
+                   php8.1-xml php8.1-mysql php8.1-bcmath php8.1-zip php8.1-intl \
+                   composer nginx mariadb-server redis-server git zip unzip tar \
+                   certbot python3-certbot-nginx
+
+    # Verify PHP installation
+    php -v || { echo "❌ PHP installation failed! Exiting."; exit 1; }
 fi
 
 # -----------------------------
@@ -78,12 +107,10 @@ if [ "$INSTALL_PANEL" = true ]; then
     mkdir -p /var/www/skilloraclouds
     cd /var/www/skilloraclouds
 
-    # Download and extract panel
     curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
     tar -xzvf panel.tar.gz --strip-components=1
     rm panel.tar.gz
 
-    # Environment setup
     cp .env.example .env
     sed -i "s|APP_URL=http://localhost|APP_URL=https://$DOMAIN|g" .env
 
@@ -96,7 +123,6 @@ if [ "$INSTALL_PANEL" = true ]; then
     echo "[+] Running migrations..."
     php artisan migrate --seed --force
 
-    # Nginx setup
     echo "[+] Configuring Nginx..."
     cat >/etc/nginx/sites-available/skilloraclouds.conf <<EOF
 server {
@@ -181,5 +207,7 @@ echo
 echo "╔═══════════════════════════════════════════════════════╗"
 echo "✅ SkilloraClouds operation completed!"
 echo "Log file: $LOG"
-echo "Visit: https://$DOMAIN (if installed)"
+if [ "$INSTALL_PANEL" = true ] || [ "$INSTALL_WINGS" = true ]; then
+    echo "Visit: https://$DOMAIN (if installed)"
+fi
 echo "╚═══════════════════════════════════════════════════════╝"
